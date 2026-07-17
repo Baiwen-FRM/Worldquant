@@ -1,0 +1,43 @@
+{
+  "注释": "这是 sweep_settings.py 的配置模板。使用时复制一份，填你自己的字段。",
+
+  "template": "trade_when(rank(FIELD) > 0.5, -rank(ts_mean(returns, 5)), 0)",
+
+  "field_regions": {
+    "USA": [
+      "max_estimate_revenue_longterm",
+      "sales_estimate_median_value",
+      "anl4_fs_detail_estimates_basic_af_v4_nd_sales_mean",
+      "mdl26_revenue",
+      "pv87_qtr_matrix_revenue_estimate_mean"
+    ],
+    "注意": "每个 region 的字段不同，换 region 前先用 get_datafields() 搜索等效字段",
+    "EUR": [
+      "est_rev_ltm_gr1y_gr",
+      "est_rev_cur_yr"
+    ],
+    "_default": []
+  },
+
+  "settings_list": [
+    {
+      "region": "USA",
+      "universe": "TOP3000",
+      "neutralization": "INDUSTRY",
+      "decay": 5,
+      "truncation": 0.08
+    },
+    {
+      "region": "USA",
+      "universe": "TOP3000",
+      "neutralization": "SUBINDUSTRY",
+      "decay": 5,
+      "truncation": 0.08
+    }
+  ],
+
+  "parameters": {
+    "WINDOW": [3, 5, 10],
+    "THRESHOLD": [0.5]
+  }
+}
