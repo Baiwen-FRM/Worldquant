@@ -1,0 +1,405 @@
+---
+name: wq-alpha-optimizer
+description: 'Optimize WorldQuant BRAIN alphas via iterative simulation using strategies from official BRAIN documentation and community forum. Supports both Fast Expression and Python Alpha. Use when: (1) user provides an Alpha ID and asks to improve/submit/optimize it, (2) an alpha failed submission and needs fixes, (3) user wants to maximize Sharpe/Fitness/Margin while reducing correlation/turnover.'
+metadata:
+  short-description: Optimize BRAIN alphas via simulation until submission-ready
+---
+
+ # WQ Alpha Optimizer
+
+## Overview
+
+Given a BRAIN Alpha ID, this skill fetches the alpha's expression and metrics, identifies what failed against actual platform thresholds, applies targeted optimization strategies, runs simulations to verify improvements, and iterates until the alpha is submission-ready.
+
+**Supports both Fast Expression and Python Alpha.** For Python Alphas, the workflow
+adapts: code modifications use Python patterns (numpy, store) instead of FastExpr
+strings, and settings are trimmed for Python compatibility.
+
+## Quick Reference: Key Platform Insights
+
+From BRAIN documentation and community forum analysis:
+
+1. **Fitness formula:** `Fitness = Sharpe * sqrt(abs(Returns) / max(Turnover, 0.125))`
+2. **Decay reduces turnover** (explicitly stated in BRAIN docs)
+3. **Submission thresholds** (actual):
+   - D1: Sharpe >= 1.5, Fitness >= 1.0
+   - D0: Sharpe >= 2.0, Fitness >= 1.3
+   - Consultant: D1 Sharpe >= 1.58, D0 Sharpe >= 2.69
+4. **Sharpe improves in two ways:** Increase return (better signal) + Reduce volatility (neutralization)
+5. **Overfitting check:** 80-20 train-test split. If Sharpe drops >50% → overfit.
+
+---
+
+## Workflow: Fast Expression Alpha
+
+### Step 1: Fetch Alpha
+
+```python
+import asyncio, cnhkmcp
+async def fetch(alpha_id):
+    await cnhkmcp.authenticate()
+    return await cnhkmcp.get_alpha_details(alpha_id)
+```
+
+Key fields: `alpha["regular"]["code"]` (expression), `alpha["settings"]`, `alpha["is"]` (metrics).
+
+### Step 2: Analyze Against Platform Thresholds
+
+```python
+check = await cnhkmcp.get_submission_check(alpha_id)
+```
+
+Check Sharpe, Fitness, Turnover, Margin, Correlation against thresholds in
+`references/submission-thresholds.md`.
+
+### Step 3: Diagnose and Optimize
+
+Use `references/optimization-strategies.md`. One change per iteration.
+
+**Quick guide:**
+- **Low Sharpe**: Smooth, combine signals, better neutralization, improve signal quality
+- **Low Fitness**: Apply decay, smooth, or use trade_when/hump operators
+- **High Turnover**: Decay, ts_mean, trade_when, hump, increase delay
+- **High Correlation**: Swap data fields, change operators, diversify datasets
+- **Weight/Margin issues**: Add truncation, avoid size factors
+- **Overfitting risk**: Use 80-20 test split, run rank/sign robustness checks
+
+### Step 4: Run Simulation (FastExpr)
+
+```python
+from cnhkmcp.untracked.platform_functions import SimulationData, SimulationSettings
+settings = SimulationSettings(
+    instrumentType=alpha["settings"]["instrumentType"],
+    region=alpha["settings"]["region"],
+    universe=alpha["settings"]["universe"],
+    delay=alpha["settings"]["delay"],
+    decay=float(alpha["settings"].get("decay", 0)),
+    neutralization=alpha["settings"].get("neutralization", "NONE"),
+    truncation=float(alpha["settings"].get("truncation", 0)),
+    pasteurization=alpha["settings"].get("pasteurization", "ON"),
+    language="FASTEXPR",
+    testPeriod="P0Y0M",
+)
+sim_data = SimulationData(type="REGULAR", settings=settings, regular=new_expr)
+result = await cnhkmcp.create_simulation(sim_data)
+```
+
+### Step 5: Evaluate and Iterate
+
+Max 5 iterations. Present comparison table to user. Do NOT auto-submit.
+
+---
+
+## Workflow: Python Alpha
+
+When the user provides a Python Alpha ID, the workflow adapts:
+
+### Step 1: Detect Python Alpha
+
+Check the alpha language. Python Alphas have:
+- Code with `@alpha` decorator, `import numpy`, `from brain.alphas`
+- Settings with `language="PYTHON"` or similar
+- `alpha["regular"]["code"]` contains Python code, not FastExpr
+
+```python
+alpha = await cnhkmcp.get_alpha_details(alpha_id)
+code = alpha["regular"]["code"]
+is_python = "@alpha" in code and "from brain.alphas" in code
+```
+
+### Step 2: Modify Python Code
+
+Instead of modifying a FastExpr string, modify the Python code directly.
+Key modification targets:
+
+**Parameter tuning:** Change values inside the code (lookback, window sizes, thresholds).
+
+**Adding/removing data fields:** Edit the `@alpha(data=[...])` decorator.
+
+**Modifying operators:** Replace numpy operations (e.g., add ts_mean via rolling window).
+
+**Adjusting neutralization:** Change the neutralization function call or settings.
+
+**Store-based modifications:** If alpha uses store, adjust store parameters.
+
+### Step 3: Run Simulation (Python)
+
+Set `language="PYTHON"` and trim settings for Python compatibility:
+
+```python
+settings = SimulationSettings(
+    instrumentType=alpha["settings"]["instrumentType"],
+    region=alpha["settings"]["region"],
+    universe=alpha["settings"]["universe"],
+    delay=alpha["settings"]["delay"],
+    decay=float(alpha["settings"].get("decay", 0)),
+    neutralization=alpha["settings"].get("neutralization", "NONE"),
+    truncation=float(alpha["settings"].get("truncation", 0)),
+    pasteurization=alpha["settings"].get("pasteurization", "ON"),
+    language="PYTHON",  # <-- Important: set to PYTHON
+    testPeriod="P0Y0M",
+    # Do NOT include: nanHandling, unitHandling (Python doesn't support these)
+)
+sim_data = SimulationData(type="REGULAR", settings=settings, regular=code)
+result = await cnhkmcp.create_simulation(sim_data)
+```
+
+**Settings trimming for Python Alpha:**
+- Remove: `nanHandling`, `unitHandling` (not supported in Python)
+- Remove: `startDate`, `endDate`, `testPeriod` (metadata only)
+- Keep: all other standard settings
+
+### Step 4: Python-Specific Optimization Patterns
+
+**Replace a FastExpr-like operation in Python:**
+```python
+# Original: ts_mean(rank(returns), 5)
+# Python equivalent: rolling mean on ranked data
+ranked = cross_sectional_rank(data.returns[-1].copy())
+window = 5
+if data.returns.shape[0] >= window:
+    smoothed = np.mean([cross_sectional_rank(data.returns[-i].copy()) 
+                        for i in range(1, window+1)], axis=0)
+```
+
+**Add complementary signal:**
+```python
+# Original: 0.7 * rank(returns) + 0.3 * rank(ts_mean(adv, 20))
+signal1 = cross_sectional_rank(data.returns[-1].copy())
+adv_mean = np.mean(data.adv[-20:], axis=0)
+signal2 = cross_sectional_rank(adv_mean)
+combined = 0.7 * signal1 + 0.3 * signal2
+```
+
+**Adjust decay via settings:**
+Change `decay` parameter in settings -- same effect as FastExpr.
+
+**Flip negative Sharpe:**
+Add `-` before the return statement: `return -signal.astype(np.float32)`
+
+### Step 5: Evaluate
+
+Same criteria as Fast Expression. The result metrics are identical.
+
+### Conversion Path
+
+If a Fast Expression alpha needs Python optimization:
+ 1. First convert: use `wq-alpha-converter` skill
+2. Then optimize the Python version using the Python workflow above
+
+---
+
+## API Quick Reference
+
+| Method | Purpose |
+|--------|---------|
+| `cnhkmcp.authenticate()` | Login |
+| `cnhkmcp.get_alpha_details(id)` | Expression + settings + metrics |
+| `cnhkmcp.create_simulation(SimulationData)` | Test and create new alpha |
+| `cnhkmcp.get_submission_check(id)` | Full submission check |
+| `cnhkmcp.check_correlation(id, "both")` | Production + self correlation |
+| `cnhkmcp.get_alpha_pnl(id)` | Historical PnL |
+| `cnhkmcp.get_platform_setting_options()` | Valid settings values |
+| `cnhkmcp.get_datafields(data_type="MATRIX", ...)` | Find alternative data fields |
+| `cnhkmcp.get_operators()` | All operators with descriptions |
+| `cnhkmcp.get_documentation_page(id)` | Fetch BRAIN docs |
+| `cnhkmcp.submit_alpha(id)` | Submit (only if user asks) |
+
+## Key Constraints
+
+1. **One change per iteration** -- Isolate cause and effect.
+2. **Preserve core logic** -- Tune, do not rewrite from scratch.
+3. **5-iteration limit** -- Stop after 5 attempts if no clear improvement.
+4. **Negative Sharpe** -- Wrap in `-(...)` (FastExpr) or `return -signal` (Python).
+5. **Check correlation at the end** -- Always `check_correlation(new_id, "both")`.
+6. **Python Alpha settings** -- Remove nanHandling, unitHandling from settings.
+7. **Test Period** -- Only for FastExpr. Python uses lookback instead.
+8. **Overfitting check** -- Run rank/sign robustness checks on the final result.
+
+## References
+
+- [references/optimization-strategies.md](references/optimization-strategies.md) -- Strategies by failure type
+- [references/submission-thresholds.md](references/submission-thresholds.md) -- Platform thresholds from docs and forum
+- [scripts/optimize_alpha.py](scripts/optimize_alpha.py) -- Helper script
+
+## Adjacent Skills
+
+ For FastExpr to Python Alpha conversion, use `wq-alpha-converter`.
+## 官方文档核心知识 (Official Documentation Insights)
+
+以下知识来源于 BRAIN 平台官方文档（通过 cnhkmcp.get_documentation_page() 获取），提供了最新的平台规则、新指标和优化视角。
+
+### 重要修正：D1 Sharpe 提交门槛
+官方 "Clear these tests before submitting an Alpha" 文档显示：
+- D1 用户门槛：Sharpe >= 1.25（而非此前社区的 1.5）
+- D0 用户门槛：Sharpe >= 2.0
+- Fitness：D1 >= 1.0, D0 >= 1.3
+- Turnover：1% < Turnover < 70%
+- Weight test：单只股票最大持仓 < 10%
+- Self-Correlation：< 0.7 PnL correlation，如果 Sharpe 比已有的相关 Alpha 高 10% 以上也可以通过
+- Self-correlation 基于四年滚动窗口计算
+
+Fitness Labels（官方文档）：
+- Spectacular: D1 > 2.5, D0 > 3.25
+- Excellent: D1 > 2.0, D0 > 2.6
+- Good: D1 > 1.5, D0 > 1.95
+- Average: D1 > 1.0, D0 > 1.3
+- Needs Improvement: D1 <= 1.0, D0 <= 1.3
+
+### Alpha 后台七步执行流程
+理解后台流程有助于定位优化瓶颈：
+1. 输入表达式 -> 2. 获取数据集 -> 3. 计算 Alpha 值 -> 4. 中性化 -> 5. 归一化 -> 6. 缩放至账面规模 -> 7. 组合权重
+
+如果 Fitness 低，问题可能在步骤3（信号质量）或步骤4（中性化选择）。如果 Turnover 高，问题在步骤3 的信号更新频率。
+
+### PnL Realization Horizon（新指标，2026年推出）
+官方 "Understanding PnL Realization Horizon" 文档定义：
+- 定义：衡量 Alpha 持仓转化为已实现 PnL 的速度
+- 短期成分：1-5天内实现回报，适合动量/新闻 Alpha
+- 长期成分：10-20+天积累回报，适合基本面 Alpha
+- HTVR 门槛：Turnover > 20% 且 PnL Realization Horizon < 20天（或 High TVR Returns > 总回报的 75%）
+
+优化应用：
+- 动量/新闻 Alpha：期望 Horizon < 10天，信号更新快，信息衰减快
+- 基本面 Alpha：期望 Horizon 20-40天，价值需要时间实现
+- 高换手 Alpha (HTVR)：期望 Horizon < 20天，换手成本需要快速实现来抵消
+
+检查方法：提交前用 PnL Realization Horizon 验证 alpha 想法是否与 horizon 匹配。
+短 horizon 的 Alpha 天然与已有长 horizon Alpha 池低相关，提供更好的分散化。
+
+### 中性化深入指南
+官方 "Neutralization" 文档关键发现：
+- 市场中性化 = Alpha - mean(Alpha)，确保多空等额
+- 行业/子行业中性化在各自组内减均值
+- group_neutralize 与设置中的 Neutralization 可互换：效果相同
+- 如果表达式末尾使用 group_neutralize(x, group)，设置中应设为 Neutralization=None, Decay=0, Truncation=0
+- 可以在表达式内手动插入 decay/truncation 算子
+
+### 双重中性化 (Double Neutralization)
+官方 "Double Neutralization" 文档：
+- 适用于多国家区域（EUR, ASI, GLB）：同时按行业和国家中性化
+- 示例 ASI：group = densify(group_cartesian_product(industry, country)); group_neutralize(alpha, group)
+- 示例 USA：group = group_cartesian_product(sector, sta1_top1000c50); alpha = group_rank(...); group_neutralize(alpha, group)
+- 不要顺序使用两次 group_neutralize，第二次会部分抵消第一次
+- 使用 group_cartesian_product 合并分组后再做一次 group_neutralize
+
+### 风险中性化类型 (Risk Neutralization)
+官方 "Advanced Topics" 文档列出四种风险中性化：
+1. Default（常规中性化）
+2. Crowding Risk-Neutralized：控制拥挤风险
+3. RAM Risk-Neutralized：基于 RAM 模型
+4. Statistical Risk-Neutralized：统计方法
+
+每种类型有不同的 Sharpe 和容量特征，对于已有 Alpha 池中添加新 Alpha 时有不同的相关度特征。
+
+### D0 与 D1 对比
+官方 "D0" 文档：
+- D0 使用当天数据（delay=0），收盘前交易，捕获隔夜回报
+- D0 收益分解：交易PnL（短期）+ 持仓PnL（较长持有期）
+- 隔夜回报：财报/新闻发布在收盘后，D1 完全错过
+- D0 预期表现更高（由于信息优势）
+
+优化建议：如果 Alpha 的信号高度依赖当日信息（如收益公告、新闻情绪），考虑转为 D0。
+但 D0 门槛更高（Sharpe >= 2.0 vs D1 的 1.25）。
+
+### Fast D1 框架
+官方 "Fast D1 Documentation" 文档：
+- 使用 D0 收盘到 D1 开盘之间的数据（隔夜信息）
+- 数据字段带 _fast_d1 后缀（如 snt_buzz_fast_d1 vs snt_buzz）
+- 捕获：隔夜新闻、盈利公告、分析师更新、盘前交易
+- 比 D1 更有信息优势，同时比 D0 更容易执行
+
+三种 delay 对比：
+- Delay 1（snt_buzz）：昨日收盘数据，仅捕获昨日收盘数据
+- Fast D1（snt_buzz_fast_d1）：今日开盘数据，捕获隔夜新闻、事件、盘前交易
+- Delay 0（snt_buzz）：今日收盘前30分钟数据，捕获收盘到今日结束——更难执行
+
+### Investability Constrained Metrics（流动性约束）
+官方文档：
+- 约束确保 Alpha 持仓在工具的流动性限制内
+- 避免重大市场冲击影响盈利
+- 高 Investability Constrained 表现的 Alpha 具有更高容量和流动性
+- 可以在新的模拟结果页面上查看
+- IS Summary 现在包含流动性约束后的聚合表现数据
+
+### 官方公式
+```
+Sharpe = sqrt(252) * Mean(PnL) / Stdev(PnL)
+Return = 年化PnL / (账面规模的一半)
+Turnover = 美元交易金额 / 账面规模
+Fitness = Sharpe * sqrt(abs(Returns) / max(Turnover, 0.125))
+```
+
+### 高点换手 (HTVR) Alpha 优化指南
+官方 "Getting Started with High Turnover Alphas" 文档：
+
+HTVR 定义：Turnover > 20%，信号在短持仓周期内仍然经济有效。
+
+HTVR 的重要性：
+- 分散化：与传统低换手信号低相关
+- 信号新鲜度：更短持仓周期意味着更快信息消化
+- 补充性：为已有组合提供正交回报来源
+
+常见错误：直接追求高换手，而不是追求短生命周期信息源。
+高换手应该是想法的结果，而不是想法本身。
+
+更好的 HTVR 工作流：
+1. 从快速变化效应的直觉开始
+2. 选择更新频率合适且有足够广度的字段
+3. 建立清晰表达该效应的简单 alpha
+4. 检查 alpha 是否自然落入高换手区间
+5. 在真实市场条件、不同 universe 和成本意识变体下测试
+
+HTVR 优化技巧（来自官方文档）：
+- 优先使用变化量（delta）而非水平量（level）：deltas, surprises, accelerations
+- 条件逻辑要谨慎：用流动性、关注度或事件状态做门控
+- 信号更新速度必须证明频繁换仓的合理性
+- 表现不应集中在少数日期或少数工具上
+
+### 优质 Alpha 的特征（来自官方文档）
+官方 "Simulate your first Alpha" 总结：
+- 一致增长的累积 PnL
+- 高年化回报、Sharpe Ratio、% Profitable Days、Profit per Dollar Traded
+- 低 Drawdown 和 Turnover
+- 累计 PnL 图没有大的波动/回撤
+- Turnover 低（但不低于 1%）、% Drawdown < 10%、Sharpe > 2.0（D0）/ > 1.25（D1）
+
+### 官方社群推荐阅读
+官方 "Must-read posts: How to improve your Alphas" 汇总了 7 篇关键社群文章：
+1. How to get a higher Sharpe
+2. 5 ways to potentially increase returns
+3. How to reduce correlation
+4. Using trade_when for Event Alphas
+5. How to smooth PnL curve
+6. Neutralization intuition
+7. How to avoid overfitting
+
+### 官方参考文档列表
+通过 cnhkmcp.get_documentation_page(id) 可获取以下完整官方教程：
++ about-brain-platform - Introduction to Alphas（基础概念）
++ introduction-brain-expression-language - Introduction to BRAIN Expression Language（表达式语法理解）
++ how-brain-platform-works - How BRAIN works（后台执行流程）
++ 19-alpha-examples - Alpha Examples for Beginners（入门示例参考）
++ sample-alpha-concepts - Alpha Examples for Bronze Users（青铜示例）
++ example-expression-alphas - Alpha Examples for Silver Users（白银示例）
++ simulation-settings - How to choose Simulation Settings（设置选择）
++ alpha-submission - Clear these tests before submitting（提交门槛）
++ parameters-simulation-results - Parameters in Simulation Results（指标解释）
++ understanding-pnl-realization-horizon - PnL Realization Horizon（HTVR新指标）
++ neut-cons - Neutralization（中性化详解）
++ neut-users - Double Neutralization（双重中性化）
++ getting-started-d0 - D0（D0 Alpha详解）
++ getting-started-investability-constrained-metrics - Investability Constrained Metrics（流动性约束）
++ fast-d1-documentation - Fast D1（Fast D1框架）
++ getting-started-high-turnover-alphas - High Turnover Alphas（HTVR指南）
++ list-must-read-posts-how-improve-your-alphas-are-submitted - Must-read posts（社群精华）
+
+---
+
+### 文档重复阅读防护
+
+每次通过 `cnhkmcp.get_documentation_page(id)` 阅读官方文档前：
+1. 先检查 `references/read-docs-index.md` 是否已阅读过该文档
+2. 如果 doc_id 已存在且 lastModified 未更新，跳过
+3. 如果文档 lastModified 日期晚于记录，需要重新阅读
+4. 阅读后更新 read-docs-index.md 中的记录

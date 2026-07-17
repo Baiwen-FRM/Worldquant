@@ -1,0 +1,4 @@
+interface:
+   display_name: "WQ Alpha Optimizer"
+  short_description: "Optimize BRAIN alphas via simulation until submission-ready"
+  default_prompt: "Give me an Alpha ID and I will optimize it until it passes submission."

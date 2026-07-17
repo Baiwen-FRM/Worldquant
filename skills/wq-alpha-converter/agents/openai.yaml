@@ -1,0 +1,3 @@
+display_name: "BRAIN Alpha Converter"
+short_description: "Convert WorldQuant BRAIN Fast Expression Alpha to Python Alpha code with proper @alpha decorator syntax, operator lookups, and data field handling."
+default_prompt: "Convert this Fast Expression Alpha into a Python Alpha: "

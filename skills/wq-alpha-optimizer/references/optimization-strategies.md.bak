@@ -1,0 +1,783 @@
+---
+name: optimization-strategies
+description: Optimization strategies from BRAIN platform documentation, community forum posts, and consultant experience. Covers all failure types with actionable modifications.
+---
+
+# Optimization Strategies
+
+**Sources:** BRAIN official tutorials, community forum ("Stop Memorizing Operators",
+"How to Improve Sharpe", "How to reduce turnover", "Avoiding Overfitting",
+"How to reduce prod correlation"), consultant experience posts (Chinese forum), and
+platform documentation.
+
+## Core Principle (from community)
+
+> "Sharpe improves in only two ways: Increase return → better predictive signal.
+> Reduce volatility → cleaner, more stable signal.
+> Most people focus on making signals more complex, but real gains often come
+> from reducing noise through better design and neutralization.
+> Better prediction + less noise = higher Sharpe."
+
+---
+
+## Low Sharpe (< 1.58 for D1, < 2.69 for D0)
+
+### S1: Add smoothing to reduce noise (from docs + community)
+The community consensus: reducing noise is often more effective than adding complexity.
+```
+rank(returns) -> ts_mean(rank(returns), 5)
+```
+Start with d=5, then try d=3 or d=10 based on turnover impact.
+
+### S2: Better neutralization (from docs + community)
+Community insight: "real gains often come from reducing noise through better neutralization."
+```
+NONE -> MARKET -> SECTOR -> SUBINDUSTRY
+```
+Consultant experience: In TOP3000 universes, sector neutralization preserves more
+cross-industry alpha than sub-industry. Sub-industry can over-clean in large universes
+where industries have many stocks.
+
+### S3: Use ts_rank (from docs)
+```
+rank(returns) -> ts_rank(returns, 21)
+```
+
+### S4: Improve signal quality (from community)
+Use more predictive data sources or combine complementary factors.
+Signals based on strong economic intuition, earnings revisions, analyst expectations,
+or quality metrics often generate higher returns than noisy indicators.
+
+### S5: Enhance signal timing (from community)
+Apply ts_arg_max, ts_rank, ts_delta, or momentum transformations to capture
+inflection points:
+```
+ts_delta(rank(x), 5)  # captures recent change
+```
+
+### S6: Combine with a complementary signal
+```
+0.7 * rank(returns) + 0.3 * rank(ts_mean(adv, 20))
+```
+
+### S7: Tune decay
+```
+decay=0 -> decay=3, 5, 7
+```
+From BRAIN docs: "Decay can be used to reduce turnover."
+
+### S8: Flip negative Sharpe
+Wrap entire expression in `-(...)`.
+
+---
+
+## Low Fitness (< 1.0 for D1, < 1.5 for D0)
+
+```
+Fitness = Sharpe * sqrt(abs(Returns) / max(Turnover, 0.125))
+```
+
+### F1: Apply decay (from BRAIN docs - explicitly recommended)
+```
+decay=0 -> decay=3, 5, 10
+```
+"Decay can be used to reduce turnover" - this is the most effective single lever.
+
+### F2: ts_mean wrapping
+```
+group_rank(returns, group) -> ts_mean(group_rank(returns, group), 10)
+```
+
+### F3: trade_when for turnover control (from forum)
+The `trade_when` operator specifically helps reduce unnecessary trading:
+```
+trade_when(condition, signal, exit_value)
+```
+
+### F4: Hump operator (from forum - community recommended)
+The `hump` operator and `ts_target_tvr_decay` are specifically designed for
+turnover control. From community: "Understanding the hump Operator in Alpha
+Creation" - these are underused but effective.
+
+### F5: Use test period to evaluate (from "Avoiding Overfitting")
+Split IS into training + test (80-20). If Sharpe drops >50% training→test,
+the alpha is overfit and won't hold OS.
+
+---
+
+## High Turnover
+
+### T1: Apply decay (from BRAIN docs - first recommendation)
+```
+decay=0 -> decay=3, 5, 10, 15
+```
+BRAIN documentation explicitly states: "Decay can be used to reduce turnover."
+
+### T2: Smooth with ts_mean
+```
+rank(returns) -> ts_mean(rank(returns), 10)
+```
+
+### T3: Use trade_when for selective trading (from forum)
+trade_when only changes positions when conditions are met, naturally reducing turnover.
+
+### T4: Use hump / ts_target_tvr_decay (from forum)
+These operators are specifically designed for turnover control.
+From the community: "Understanding the hump Operator in Alpha Creation"
+
+### T5: Increase delay
+```
+delay=1 -> delay=2
+```
+
+### T6: Consultant insight - short decay (6 days)
+From Chinese forum: short decay (6 days) improves IS Sharpe but incurs high
+transaction costs. Stacking cross-sectional momentum control at the sub-factor
+level can reduce unnecessary rebalancing.
+
+### T7: Six techniques from the community (post: "How to reduce turnover"):
+1. Increase Decay to Smooth Signals
+2. Utilize the trade_when Operator
+3. Implement Truncation to Limit Position Sizes
+4. Neutralize Across Groups
+5. Adjust Signal Thresholds
+6. Optimize Universe Selection
+
+---
+
+## High Correlation (> 0.7 to production or self)
+
+### C1: Swap data fields within same dataset (from docs + forum)
+```
+rank(returns) -> rank(adv20)       # price -> volume
+rank(bm) -> rank(earnings_yield)   # book-to-market -> earnings yield
+```
+From forum: "Use multiple datasets - fundamental, alternative, and technical indicators."
+
+### C2: Change operator family (from docs + forum)
+```
+rank -> group_rank or vice versa
+rank -> zscore -> ts_rank
+```
+
+### C3: Diversify input data (from community)
+From forum post "How to reduce prod correlation":
+- Mix short-term and long-term signals
+- Use different datasets (fundamental, alternative, technical)
+- Combine different modeling approaches
+
+### C4: Orthogonalize (from community)
+Feature engineering and residualization to remove common factor exposure.
+
+### C5: Consultant insight - correlation < 0.6 hard cutoff
+From Chinese forum: Using correlation < 0.6 as cutoff passes PROD correlation
+easily but filters out high-Sharpe signals. Balance by testing correlation
+with the specific pool, not just generic benchmarks.
+
+### C6: Local correlation pre-check (from Chinese forum consultant)
+If user has 100+ OS submissions: build a local correlation matrix by periodically
+downloading the personal alpha history. Pre-filter new candidates against this
+matrix before using platform quota. Filters 70%+ of correlated alphas in the
+first round.
+
+### C7: Use less common operators for differentiation
+Community insight: "Hidden gems" operators that are underused:
+- regression_neut, ts_quantile, ts_decay_exp_window
+- group_cartesian_product, inst_tvr
+- vec_range, last_diff_value, days_from_last_change
+
+### C7a (Python Alpha): Custom operator via wq-alpha-converter
+In Python Alpha, C7 moves up significantly in priority. The `wq-alpha-converter` skill
+supports defining custom operators — reusable signal-processing units that wrap arbitrary
+numpy/brain logic. This creates **structural** differentiation, not just surface-level
+operator swaps:
+
+```python
+# Instead of a plain expression that 30 other people may have written similarly,
+# wrap into a custom operator with unique structure:
+@alpha(data=[...])
+@custom_operator
+def my_two_layer_neut(rets, volume):
+    layer1 = cross_sectional_rank(rets) - cross_sectional_mean(cross_sectional_rank(rets))
+    layer2 = ts_mean(layer1, 5) * cross_sectional_rank(volume)
+    return group_neutralize(layer2, subindustry).astype(np.float32)
+```
+
+A custom operator is effectively a new signal "component" — if two alphas don't share
+any custom operator lineage, they are structurally different in a way that raw field
+and operator swaps cannot achieve. This makes C7 especially valuable for users who
+already have many alphas in the pool and need fresh, orthogonal signals.
+
+**Fast Expression vs Python Alpha priority:**
+
+```
+Fast Expression correlation priority:
+  1. C1 换字段            ← 改动最小，值得先做
+  2. C2 换算子族
+  3. C7 冷门算子           ← 原生算子里选冷门，边际差异有限
+  4. C3 分散输入数据
+  5. C4-C6 更重的方案
+
+Python Alpha correlation priority:
+  1. C1 换字段            ← 改动最小，依然值得先做
+  2. C7a Custom Operator ← 结构化差异，命中率高，Python 下零成本
+  3. C7 冷门算子           ← 如果不想走 custom operator
+  4. C3 分散输入数据
+  5. C2 换算子族           ← 如果以上都做了还不够
+  6. C4-C6 更重的方案
+```
+
+In Python Alpha, C7a consistently sits at position 2 — it costs nothing extra in
+Python (no new imports, no new datasets), creates structural signal uniqueness,
+and has the highest correlation-reduction leverage per unit of effort.
+
+---
+
+## Low Margin / Concentration / Weight Test
+
+### Low Margin
+
+#### M1: Increase truncation
+```
+truncation=0.01 -> 0.03 -> 0.05
+```
+Note: truncation=0.05 is aggressive. If simulation fails, back off to 0.03 or combine with other operators rather than going higher.
+
+#### M2: Avoid size factors (from BRAIN sub-universe test docs)
+- Avoid: rank(-assets), 1 - rank(cap)
+- Avoid: factor-momentum interaction (e.g. ts_rank(rank(accruals), 21))
+
+#### M3: Diversify signals
+More diversification helps sub-universe performance.
+
+---
+
+### Concentration (持仓集中度)
+
+Single-stock weight > 10% triggers concentration failure, even if overall margin is fine.
+
+#### CO1: Truncation with nuance
+```
+truncation=0.01 -> 0.03
+```
+truncation=0.05 can sometimes fail simulation due to excessive clipping. Start at 0.01, move to 0.03, and if 0.05 fails, combine with other operators instead of forcing higher.
+
+#### CO2: maxPosition=ON (simulation setting)
+Enable `maxPosition` in simulation settings to cap single-stock max weight directly. This is a platform-level constraint separate from truncation — truncation clips outliers in expression space, maxPosition caps them in portfolio-weight space.
+
+#### CO3: winsorize operator
+```python
+# Fast Expression / Python: compress extreme values without hard cutoff
+winsorize(signal, min=0.01, max=0.99)
+```
+Unlike truncation which discards values outside a range, winsorize pulls extreme values to the boundary. Softer on the distribution, and often passes simulation weight checks that truncation fails.
+
+#### CO4: scale operator
+```python
+# Normalize positions so no single stock dominates
+scale(signal, target=1.0)
+scale(winsorized_signal, target=0.95)
+```
+Ensures total position size is bounded. Combine with winsorize for two-layer weight control: compress extremes first, then normalize to target scale.
+
+#### CO5: hump operator
+```
+hump(signal, hump=0.1)  # mild clipping
+```
+Softer alternative to truncation. Limits extreme weights without a hard cutoff.
+
+#### CO6: Remove size-based multipliers
+`rank(-assets)`, `1 - rank(cap)` naturally concentrate weights. Remove or replace with non-size-based alternatives.
+
+---
+
+### Weight Test (权重分布)
+
+Weight test is about the **overall weight distribution** (skew, dispersion, asymmetry) — not just single-stock limits. An alpha can pass concentration but fail weight test.
+
+#### W1: All concentration solutions
+truncation, maxPosition, winsorize, scale, hump — everything above applies here too.
+
+#### W2: Avoid manual weight skew
+Check if component signal coefficients are so unbalanced that they produce systematic overweight on one side (e.g., 0.9 × signalA + 0.1 × signalB creates near-monolithic long positions).
+
+#### W3: Ensure normalization operators are paired
+rank/zscore/scale should be paired in the expression: if you rank at step 1, you should scale or normalize later. An un-normalized rank output can produce extreme weight dispersion.
+
+#### W4: Test with different truncation levels
+Weight test responds differently to truncation than concentration does. Run weight test separately:
+```
+# weight test passes at truncation=0.03 but fails at 0.01
+# increase truncation incrementally
+```
+
+---
+
+## Overfitting Prevention (from community post)
+
+From "Avoiding Overfitting in Alpha Research" (38319194429847):
+
+### O1: Always use a Test Period
+Split IS into training (80%) + test (20%). Develop alpha only on training.
+If Sharpe drops >50% training→test → overfit.
+
+### O2: Robustness checks
+- Rank test: wrap signal with rank()
+- Binary test: wrap signal with sign()
+If performance drops >70% after these → fitting noise, not signal.
+
+### O3: Simple first (from "Curiosity Before Complexity")
+Ask: "Why should this signal exist? Under what conditions would it stop working?"
+Don't start with complex stacking - build a simple alpha first.
+
+---
+
+## Operator Role Framework (from community post)
+
+From "Stop Memorizing Operators. Learn Their Jobs." (41820050908823):
+
+| Role | Examples | Purpose |
+|------|----------|---------|
+| Foundation | abs, add, multiply, divide, log | Build relationships, transform raw signals |
+| Cross-Sectional | rank, zscore, scale, normalize | Compare stocks, remove market effects |
+| Time-Series | ts_rank, ts_delta, ts_mean, ts_corr | Learn from history, trend, momentum |
+| Signal Cleaning | winsorize, truncate, ts_backfill | Handle outliers, improve coverage |
+| Turnover Control | trade_when, hump, ts_target_tvr_decay | Reduce turnover, stabilize positions |
+| Group Intelligence | group_rank, group_neutralize, bucket | Industry-aware signals, neutralization |
+| Vector | vec_avg, vec_count, vec_range | Convert vector datasets to scalars |
+| Logical | if_else, and, or, is_nan | Conditional logic, event handling |
+| Distribution | densify, bucket, left_tail | Regime detection, extreme-value analysis |
+| Hidden Gems | regression_neut, ts_quantile, inst_tvr | Underused but powerful |
+
+---
+
+## Post-Optimization Checklist
+
+---
+
+## Sub-Universe Sharpe (from Chinese forum)
+
+From community posts (35062818902423, 37378958993303, 37759477785239):
+
+### SU1: signed_power signal transformation (most effective)
+When Sub-universe Sharpe fails, wrapping with `signed_power` can transform the signal distribution:
+```
+signed_power(original_expr, y)
+```
+- **y > 1** (e.g. y=2): Amplifies extreme values, compresses middle values → stronger signal differentiation. Proven to turn Sub-universe fail into Spectacular pass.
+- **0 < y < 1** (e.g. y=0.5): Compresses extremes, pulls distribution toward Gaussian → smoother signal, less outlier sensitivity, better robustness.
+- Try y in range [0.25, 2.0]; most effective case: y=2 turned Sub-universe 0.51→Spectacular.
+
+### SU2: Liquidity-weighted decay separation
+Separate signal into liquid and illiquid components with different decay windows:
+```
+ts_decay_linear(signal, short_window) * rank(volume*close)
++ ts_decay_linear(signal, long_window) * (1 - rank(volume*close))
+```
+Use `volume*close` or `cap` as liquidity proxy. Short window (e.g. 5 days) for liquid portion,
+long window (e.g. 10 days) for illiquid portion. If initial attempt fails, try adjusting
+window parameters rather than giving up.
+
+### SU3: Strengthen neutralization
+- Add `group_neutralize(signal, sector)` or `group_neutralize(signal, subindustry)`
+- Switch neutralization from NONE → SECTOR → SUBINDUSTRY
+- From forum: SUBINDUSTRY neutralization is more effective for Sub-universe issues in EUR/USA
+
+### SU4: Avoid size-related multipliers
+- Avoid: `rank(-assets)`, `1 - rank(cap)`, or similar size-factor multipliers
+- Size multipliers concentrate weight in low/high liquidity stocks → Sub-universe failure
+- If using cap filtering, keep filter very loose (e.g. `rank(cap) > 0.01`)
+
+### SU5: Strategic fallback
+If all above fail, the signal may lack inherent robustness — "Some signals are intrinsically
+not robust." Consider changing the core logic rather than continuing to patch.
+
+---
+
+## IS Ladder Sharpe (from Chinese forum)
+
+From community post (39050410166807 "关于IS ladder sharpe优化的一点实践经验"):
+
+### IL1: ts_rank wrapper
+Wrap the expression with `ts_rank` to stabilize the time-series behavior:
+```
+ts_rank(original_expr, d)
+```
+Start with d=120, then try d=60, 90, 180. From a JPN case study,
+d=180 gave IS Ladder = 1.24 (improved but still below threshold).
+
+### IL2: power(ts_rank(...)) for final push
+Apply `signed_power` or `power` on top of ts_rank to push IS Ladder over the threshold:
+```
+power(ts_rank(original_expr, 120), 2)
+```
+From forum case: ts_delta(ts_product(...), 352) → ts_rank(..., 120) → power(ts_rank(...), 2)
+successfully lifted IS Ladder from fail to > 1.58 without degrading overall performance.
+
+### IL3: Check margin first
+Low-margin alphas tend to have worse IS Ladder due to turnover costs eating into
+historical returns. If margin is very low (< 0.001), IS Ladder issues may be
+secondary to the turnover/margin problem.
+
+---
+
+## Regional Optimization (from Chinese forum)
+
+### Japan (ASI) Robustness (post 40531412200471)
+JPN Sharpe >= 1.0 is a common stumbling block for ASI region alphas.
+
+**Key insights from a successful case (JPN Sharpe 0.88 → 1.00):**
+- **Optimization priority**: signal weights > grouping dimension > window params > field choice
+- **sector grouping is unreliable in Japan**: switch to `market` grouping for cross-sectional ops
+- **Fundamental data (fnd28) is weak in Japan**: its coverage is low; dont try to fix it, compensate with price-based signals instead
+- **When a component signal underperforms in a sub-region**: reduce its weight rather than trying to fix it
+- **signed_power must match dominant signal type**: 0.75 (compress) for fundamental-heavy, 1.1 (stretch) for price-reversal-heavy
+
+```
+alpha1 = trade_when(group_rank(...region_filter), fundamental_signal, cap_filter);
+alpha = alpha1 + 2.5 * group_rank(-ts_mean(returns, 20), market);
+signed_power(alpha, 1.1)
+```
+
+**Key parameter changes from the case:**
+- Reversal weight: 0.5 → 2.5 (5x)
+- Reversal grouping: sector → market
+- Reversal window: 10 → 20 days
+- signed_power: 0.75 → 1.1
+
+**If 3+ attempts don't improve a sub-region:** the signal component is fundamentally
+unreliable in that region. Stop trying to fix it. Reduce its weight or replace it.
+
+### IND Robust Universe (post 37759477785239)
+IND region frequently fails Robust Universe Sharpe due to sparse datasets.
+
+**Methods:**
+- Adjust `ts_backfill` window: try 60 → 90 → 120 for better coverage
+- Use `group_backfill` with well-chosen groups (sector/industry) instead of ts_backfill
+- Apply `group_zscore` / `group_neutralize` — both tend to work similarly; if one works, both work
+- Use smaller window sizes (15, 22, 66) — IND datasets often signal better on shorter windows
+- Warning: smaller windows may increase prod correlation
+
+### ASI General (from forum posts)
+- ASI regions require `max_trade=ON` in settings
+- Sector grouping in ASI may be inconsistent across sub-regions; prefer MARKET grouping for cross-sectional operators in multi-country ASI alphas
+- Japan is the most common sub-region failure point; always check JPN Sharpe when optimizing ASI
+
+---
+
+## Detailed Turnover Reduction with Decay Windows (from forum)
+
+From community post (34949059814679 "turnover优化，论坛精华版"):
+
+### T8: ts_decay_linear with window economics
+Window size economic interpretation:
+| Window | Calendar | Best For |
+|--------|----------|----------|
+| 5 | 1 trading week | Short-term signal smoothing |
+| 22 | 1 trading month | Monthly trend capture |
+| 44 | 2 trading months | Medium-term signal stabilization |
+| 63 | 1 quarter (earnings cycle) | Fundamental signals |
+
+Expect 30-50% turnover reduction with acceptable Sharpe loss (< 15%).
+
+### T9: hump operator
+```
+hump(original_expr, hump=0.1)  # mild clipping
+hump(original_expr, hump=0.2)  # moderate
+hump(original_expr, hump=0.3)  # aggressive
+```
+Especially effective when Sub-universe Sharpe is also an issue.
+
+### T10: TVR control operators
+```
+ts_target_tvr_delta_limit(original_expr, volume, target_tvr=0.1)
+ts_target_tvr_delta_limit(original_expr, volume, target_tvr=0.15)
+```
+These directly target a specific turnover level. Forum recommendation: prefer
+ts_decay_linear over TVR operators when overfitting risk is a concern.
+
+### T11: Combined smoothing
+```
+ts_decay_linear(ts_mean(original_expr, 5), 22)  # weekly mean + monthly decay
+hump(ts_decay_linear(original_expr, 5), hump=0.2)  # weekly decay + clipping
+```
+
+### T12: Window size generalization
+- Smaller windows → higher turnover, lower prod correlation risk
+- Larger windows → lower turnover, potentially higher prod correlation
+- Balance: match window size to the data's natural signal frequency
+
+---
+
+## Deep Optimization Principles (from Chinese forum)
+
+From the Japan Robustness optimization case (40531412200471):
+
+### P1: Optimization priority order
+1. **Signal weights** (most impactful) — 0.5 → 2.5 (5x change, not 1.2x)
+2. **Grouping dimension** — sector vs market vs subindustry vs country
+3. **Window parameters** — decay length, lookback period
+4. **Field selection** (least impactful) — only change if combining with weight/grouping changes
+
+### P2: Dont try to fix what is broken
+If a signal component is fundamentally weak in a sub-region (3+ failed attempts),
+stop trying to fix it. Instead:
+- Reduce its weight
+- Compensate with a different signal that works in that sub-region
+- Accept the component's limitations and optimize around them
+
+### P3: Parameter search: wide first, then narrow
+Wrong approach: change fields → change windows → change weights (from micro to macro)
+Right approach: change weights (0.1→5.0) → change grouping → change windows → change fields (from macro to micro)
+
+### P4: signed_power must match signal type
+- Fundamental-heavy signals: use 0.75 (compress extremes, handle outliers)
+- Price/reversal-heavy signals: use 1.1-2.0 (stretch distribution, enhance differentiation)
+- Defaulting to one value for all signal types misses optimization opportunities
+
+### P5: When micro-adjustments fail, go structural
+If 3 rounds of micro-tuning (window sizes, thresholds, decay) don't fix a Sharpe gap of 0.12,
+the solution is not finer tuning but structural change — typically weight redistribution or
+grouping dimension change.
+
+Before presenting to user:
+1. All metrics pass platform thresholds
+2. Check correlation: `cnhkmcp.check_correlation(new_id, "both")`
+3. If GLB region: check sub-geography Sharpe (AMER>=1, APAC>=1, EMEA>=1)
+4. Rank test the new alpha as a robustness sanity check
+5. Sub-universe test passed (check formula if user can see it)
+## 官方文档补充优化策略（2026年更新）
+
+以下策略来源于 BRAIN 官方文档（通过 cnhkmcp.get_documentation_page() 获取）。
+
+### HTVR：高点换手 Alpha 优化（来自官方 "High Turnover Alphas" + "PnL Realization Horizon" 文档）
+
+HTVR 目标：Turnover > 20%，PnL Realization Horizon < 20天
+
+#### HTVR1：高换手的正确出发点
+常见错误：直接追求高换手，而不是追求短生命周期信息源。
+高换手应该是想法的结果，而不是想法本身。
+
+正确工作流：
+1. 从快速变化效应的直觉开始（如新闻情绪、收益惊喜、短期反转）
+2. 选择更新频率合适且有足够广度的字段（如价格变化、情绪指标）
+3. 建立清晰表达该效应的简单 alpha
+4. 检查 alpha 是否自然落入高换手区间
+5. 在真实市场条件、不同 universe 和成本意识变体下测试
+
+#### HTVR2：使用变化量而非水平量
+优先使用：delta, surprises, accelerations, revisions
+避免使用：静态水平值（如 raw close, raw volume）
+```
+# 推荐：delta/surprise 类
+ts_delta(rank(returns), 1)  # 短期变化
+rank(ts_delta(adv20, 5))     # 成交量变化
+
+# 不推荐：静态水平
+rank(returns)  # 水平量
+```
+
+#### HTVR3：条件逻辑做事件门控
+用流动性、关注度或事件状态做门控，帮助信号在正确时机行动：
+```
+trade_when(liquidity > 0.1, signal, -1)  # 仅在流动性足够时交易
+```
+
+#### HTVR4：PnL Realization Horizon 验证
+提交前检查 PnL Realization Horizon 是否与 Alpha 想法匹配：
+- 动量/新闻 Alpha：期望 Horizon < 10天
+- 基本面 Alpha：期望 Horizon 20-40天
+- 高换手 Alpha (HTVR)：期望 Horizon < 20天
+
+如果 Horizon 与想法类型不匹配，说明信号时间特征不符合预期。
+
+#### HTVR5：分散化价值
+短 Horizon 的 Alpha 天然与长 Horizon Alpha 池低相关：
+- 与已有 daily 池更低相关
+- 对 book 影响更小
+- 更好的分散化收益
+
+#### HTVR6：质量检查清单
+好的高换手研究特征：
+- 信号更新速度足以证明频繁换仓的合理性
+- 表现不集中在少数日期或工具上
+- 在现实约束或 investable 设置下仍有意义
+- 能用"信息为何应快速到达并衰减"来解释想法
+
+### D0 优化策略（来自官方 "D0" 文档）
+
+#### D0-1：识别适合 D0 的想法
+D0 适合的信号特征：
+- 高度依赖当日信息（收益公告、新闻情绪、盘前数据）
+- 利用隔夜回报（Overnight Returns）
+- 短持仓周期，快速信息衰减
+
+#### D0-2：D0 的收益来源理解
+D0 收益分为两个部分：
+- 交易PnL（短期）：快速反转、微观结构
+- 持仓PnL（较长持有期）：隔夜到次日的趋势延续
+
+优化时可分别关注哪个部分贡献更大。
+
+#### D0-3：D0 与 D1 的切换测试
+如果 D1 Alpha 的信号可能受益于当日信息：
+1. 先在 D1 下优化到最佳
+2. 改为 delay=0 测试 D0 版本
+3. 预期 Sharpe 提升（但门槛也提高到 2.0）
+
+D0 比 D1 更早进入交易，所以预期表现更高。
+
+### Fast D1 优化策略（来自官方 "Fast D1 Documentation" 文档）
+
+#### FD1-1：识别 Fast D1 机会
+Fast D1 适合的信号特征：
+- 使用隔夜信息（新闻、财报、分析师更新、盘前交易）
+- 传统 D1 数据时间戳为昨日收盘，信息已经过时
+
+#### FD1-2：字段选择
+使用带 _fast_d1 后缀的字段：
+- snt_buzz_fast_d1（今日开盘情绪，vs snt_buzz 昨日收盘）
+- 其他 Fast D1 系列字段
+
+对比三种 delay 的信息优势：
+- Delay 1（snt_buzz）：仅昨日收盘数据
+- Fast D1（snt_buzz_fast_d1）：今日开盘数据，捕获隔夜信息
+- Delay 0（snt_buzz）：今日收盘前数据，信息最新但更难执行
+
+#### FD1-3：快速 D1 的特殊优化
+- 数据更新更快，换手通常更高
+- 需要结合 HTVR 策略控制换手
+- 通过 ts_mean 或 decay 平滑信号
+
+### 双重中性化策略（来自官方 "Double Neutralization" 文档）
+
+#### DN-1：适用区域
+- EUR, ASI, GLB（多国家区域）：行业 + 国家双重中性化
+- USA：行业/子行业 + 统计分组（如 sta1_top1000c50）
+
+#### DN-2：正确实现方式
+不要顺序使用两次 group_neutralize：
+```
+# 错误：第二次会部分抵消第一次
+group_neutralize(group_neutralize(Alpha, industry), country)
+
+# 正确：使用 group_cartesian_product 合并分组
+group = densify(group_cartesian_product(industry, country))
+group_neutralize(Alpha, group)
+```
+
+#### DN-3：ASI 区域示例
+```
+alpha = ts_rank(eps, 252)
+group = densify(group_cartesian_product(industry, country))
+group_neutralize(alpha, group)
+```
+设置 Neutralization=None, Decay=0, Truncation=0。
+
+#### DN-4：USA 区域示例
+```
+group = group_cartesian_product(sector, sta1_top1000c50)
+alpha = group_rank(ts_rank(eps, 252), group)
+group_neutralize(alpha, group)
+```
+
+#### DN-5：优化建议
+- 双重中性化对多国家区域的 alpha 有显著提升
+- 使用基本的行业/国家分组效果最好
+- 尝试不同的分组组合（industry+country, sector+sta_group等）
+- 如果一种组合失效，尝试更换分组维度
+
+### 风险中性化四种类型（来自官方 "Advanced Topics" 文档）
+
+#### RN-1：四种类型对比
+| 类型 | 特点 | 适合场景 |
+|------|------|---------|
+| Default | 常规中性化 | 大多数情况 |
+| Crowding Risk | 控制拥挤风险 | 已有大量 ALPHA 提交后 |
+| RAM Risk | 基于 RAM 模型 | 需要模型驱动的风险控制 |
+| Statistical Risk | 统计方法 | 无先验风险因子时 |
+
+#### RN-2：选择建议
+- 初期使用 Default
+- 当已有 alpha 池变大时，考虑 Crowding Risk 降低拥挤暴露
+- RAM 和 Statistical 在更复杂的 alpha 管理场景使用
+
+### PnL Realization Horizon 深度应用（来自官方文档）
+
+#### PH-1：验证 Alpha 想法匹配度
+提交前检查 PnL Realization Horizon 是否与 Alpha 的 thesis 匹配：
+- 动量/新闻 Alpha：应有短 horizon（< 10天）——信息衰减快
+- 基本面 Alpha：可能有较长的 horizon（20-40天）——价值需要时间实现
+- 高换手 Alpha：必须短 horizon（< 20天）——换仓成本需要快速实现来抵消
+
+#### PH-2：识别正交信号
+短 horizon 的 Alpha 天然与每日 Alpha 池正交：
+- 与现有持仓更低相关
+- 对 book 影响更小
+- 更好的分散化收益
+
+#### PH-3：理解信号成分
+Alpha 的 PnL 实现有两个成分：
+- 短期成分：1-5天内实现，信号在5天后几乎没有预测性
+- 长期成分：10-20+天累积，信号需要更长时间实现价值
+
+优化时可针对性地增强主要成分。
+大多数已提交的 Alpha 有 20+ 天的 horizon（低换手成分可达 40+ 天）。
+短期实现的 Alpha 提供自然正交性。
+
+### Investability Constrained Metrics 优化（来自官方文档）
+
+#### IC-1：理解流动性约束
+Investability Constraints 确保 Alpha 持仓在工具的流动性限内：
+- 避免重大市场冲击影响盈利
+- 高 Investability 表现的 Alpha 有更高容量和流动性
+- 可在新模拟结果页面查看
+
+#### IC-2：优化建议
+- 添加 truncation 减少极端持仓
+- 避免在小盘股上过度集中
+- 检查 IS Summary 中的流动性约束后表现
+- 不同 universe（TOP3000 vs TOP1000）的流动性特征不同
+
+### 官方公式汇总
+
+```
+Sharpe = sqrt(252) * Mean(PnL) / Stdev(PnL)
+Return = 年化PnL / (账面规模的一半)
+Turnover = 美元交易金额 / 账面规模
+Fitness = Sharpe * sqrt(abs(Returns) / max(Turnover, 0.125))
+```
+
+公式来自官方 "Parameters in Simulation Results" 文档和 "Fitness" 文档。
+
+### 官方社群精华文章（改善 Alpha 的 7 篇必读）
+来自官方 "Must-read posts: How to improve your Alphas"：
+1. How to get a higher Sharpe
+2. 5 ways to potentially increase returns
+3. How to reduce correlation
+4. Using trade_when for Event Alphas（降低换手）
+5. How to smooth PnL curve（减少波动）
+6. Neutralization intuition（中性化直觉）
+7. How to avoid overfitting（避免过拟合）
+
+可通过 cnhkmcp.get_documentation_page 获取这些文章的完整链接。
+
+### 官方文档参考表
+通过 `cnhkmcp.get_documentation_page(id)` 获取完整官方教程：
++ about-brain-platform - Introduction to Alphas（基础概念）
++ introduction-brain-expression-language - BRAIN 表达式语言
++ how-brain-platform-works - BRAIN 后台执行流程
++ 19-alpha-examples - 初级 Alpha 示例
++ sample-alpha-concepts - 青铜 Alpha 示例
++ example-expression-alphas - 白银 Alpha 示例
++ simulation-settings - 设置选择指南
++ alpha-submission - 提交门槛详解
++ parameters-simulation-results - 模拟结果参数说明
++ understanding-pnl-realization-horizon - PnL 实现周期
++ neut-cons - 中性化详解
++ neut-users - 双重中性化
++ getting-started-d0 - D0 Alpha
++ getting-started-investability-constrained-metrics - 流动性约束指标
++ fast-d1-documentation - Fast D1 框架
++ getting-started-high-turnover-alphas - 高换手 Alpha 指南
++ list-must-read-posts-how-improve-your-alphas-are-submitted - 社群精华文章

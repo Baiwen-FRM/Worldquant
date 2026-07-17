@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wq Alpha Idea Developer"
+  short_description: "从BRAIN平台文章、手动描述、已有Alpha或随机探索中提取Alpha灵感，转化为带settings的可执行表达式"
+  default_prompt: "帮我从[BRAIN平台文章/手动描述/已有Alpha/随机探索]中提取一个Alpha灵感，开发成表达式"
